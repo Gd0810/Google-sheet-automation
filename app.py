@@ -19,8 +19,8 @@ spreadsheet = client.open("Girdharan_daily_work_report")
 
 def format_sheet(sheet):
 
-    # Header style
-    sheet.format("A1:D1", {
+    # Header style (full width)
+    sheet.format("A1:Z1", {
         "backgroundColor": {
             "red": 0.2,
             "green": 0.4,
@@ -37,13 +37,13 @@ def format_sheet(sheet):
         "horizontalAlignment": "CENTER"
     })
 
-    # Center align all columns
-    sheet.format("A:D", {
+    # Center align all columns (full width)
+    sheet.format("A:Z", {
         "horizontalAlignment": "CENTER"
     })
 
-    # Set column width
-    sheet.columns_auto_resize(0, 4)
+    # Set column width for a wider range
+    sheet.columns_auto_resize(0, 26)
 
 
 def get_month_sheet(date_string):
@@ -61,7 +61,8 @@ def get_month_sheet(date_string):
 
         sheet = spreadsheet.add_worksheet(title=month_name, rows=1000, cols=4)
 
-        sheet.update(values=[["Date", "Task", "From", "To"]], range_name="A1:D1")
+        header = ["Date", "Task", "From", "To"] + [""] * 22
+        sheet.update(values=[header], range_name="A1:Z1")
 
         format_sheet(sheet)
 
@@ -70,7 +71,7 @@ def get_month_sheet(date_string):
 
 def add_row_border(sheet, row_number):
 
-    sheet.format(f"A{row_number}:D{row_number}", {
+    sheet.format(f"A{row_number}:Z{row_number}", {
         "borders": {
             "top": {"style": "SOLID"},
             "bottom": {"style": "SOLID"},
@@ -82,7 +83,7 @@ def add_row_border(sheet, row_number):
 
 def insert_separator_row(sheet, row_number):
     # Insert a visible gap row with no borders and a taller height
-    sheet.insert_row(["", "", "", ""], row_number)
+    sheet.insert_row(["", "", "", ""] + [""] * 22, row_number)
 
     requests = [
         {
@@ -92,7 +93,7 @@ def insert_separator_row(sheet, row_number):
                     "startRowIndex": row_number - 1,
                     "endRowIndex": row_number,
                     "startColumnIndex": 0,
-                    "endColumnIndex": 4
+                    "endColumnIndex": 26
                 },
                 "top": {"style": "NONE"},
                 "bottom": {"style": "NONE"},
@@ -125,7 +126,7 @@ def insert_separator_row(sheet, row_number):
                     "startRowIndex": row_number - 2,
                     "endRowIndex": row_number - 1,
                     "startColumnIndex": 0,
-                    "endColumnIndex": 4
+                    "endColumnIndex": 26
                 },
                 "bottom": {"style": "NONE"}
             }
@@ -215,7 +216,7 @@ def index():
             next_row_index += 1
 
         for row in rows:
-            sheet.insert_row(row, next_row_index)
+            sheet.insert_row(row + [""] * 22, next_row_index)
             add_row_border(sheet, next_row_index)
             print("Inserted Row:", row)
             next_row_index += 1
