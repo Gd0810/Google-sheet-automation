@@ -178,6 +178,88 @@ def parse_report(report_text):
     return rows, date
 
 
+def normalize_time_string(value):
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    dt = datetime.strptime(cleaned, "%I:%M %p")
+    return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def time_to_minutes(value):
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    dt = datetime.strptime(cleaned, "%I:%M %p")
+    return dt.hour * 60 + dt.minute
+
+
+def date_to_key(value):
+    cleaned = value.strip()
+    dt = datetime.strptime(cleaned, "%d %B %Y")
+    return dt.date()
+
+
+def is_blank_row(row):
+    return not row or all(cell.strip() == "" for cell in row)
+
+
+def get_row_date(row):
+    if not row or len(row) == 0:
+        return ""
+    cell = row[0].strip()
+    if cell.lower() == "date":
+        return ""
+    return cell
+
+
+def find_insert_index(existing_data, date_value, start_minutes):
+    # existing_data is 0-based list of rows; return 1-based row index
+    new_date_key = date_to_key(date_value)
+
+    for idx, row in enumerate(existing_data[1:], start=2):
+        row_date = get_row_date(row)
+        if row_date == "":
+            continue
+
+        try:
+            row_date_key = date_to_key(row_date)
+        except Exception:
+            continue
+
+        if new_date_key < row_date_key:
+            # Insert before this later date (and before its separator if present)
+            if idx > 2 and is_blank_row(existing_data[idx - 2]):
+                return idx - 1
+            return idx
+
+        if new_date_key == row_date_key:
+            try:
+                row_start = time_to_minutes(row[2])
+            except Exception:
+                row_start = None
+
+            if row_start is not None and start_minutes < row_start:
+                return idx
+
+    return len(existing_data) + 1
+
+
+def ensure_separator_between(sheet, existing_data, upper_index, lower_index):
+    # upper_index and lower_index are 1-based, and should be adjacent
+    if lower_index != upper_index + 1:
+        return
+
+    upper_row = existing_data[upper_index - 1]
+    lower_row = existing_data[lower_index - 1]
+
+    if is_blank_row(lower_row):
+        return
+
+    upper_date = get_row_date(upper_row)
+    lower_date = get_row_date(lower_row)
+
+    if upper_date and lower_date and upper_date != lower_date:
+        insert_separator_row(sheet, lower_index)
+        existing_data.insert(lower_index - 1, [""] * 26)
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
 
@@ -211,11 +293,19 @@ def index():
         existing_slots = set()
         for row in existing_data[1:]:
             if len(row) >= 4 and row[0].strip() != "":
-                existing_slots.add((row[0].strip(), row[2].strip(), row[3].strip()))
+                existing_slots.add((
+                    row[0].strip(),
+                    normalize_time_string(row[2]),
+                    normalize_time_string(row[3])
+                ))
 
         rows_to_insert = []
         for row in rows:
-            slot_key = (row[0].strip(), row[2].strip(), row[3].strip())
+            slot_key = (
+                row[0].strip(),
+                normalize_time_string(row[2]),
+                normalize_time_string(row[3])
+            )
             if slot_key in existing_slots:
                 print("Duplicate slot skipped:", row)
                 continue
@@ -225,19 +315,20 @@ def index():
         if not rows_to_insert:
             return "No new rows to insert (duplicate time slots)."
 
-        # If new date detected, insert blank row
-        next_row_index = last_data_row_index + 1
-
-        if last_date and last_date != date and last_data_row_index > 1:
-            print("New day detected → inserting blank row")
-            insert_separator_row(sheet, next_row_index)
-            next_row_index += 1
+        rows_to_insert.sort(key=lambda r: (date_to_key(r[0]), time_to_minutes(r[2])))
 
         for row in rows_to_insert:
-            sheet.insert_row(row + [""] * 22, next_row_index)
-            add_row_border(sheet, next_row_index)
+            insert_at = find_insert_index(existing_data, row[0].strip(), time_to_minutes(row[2]))
+            sheet.insert_row(row + [""] * 22, insert_at)
+            add_row_border(sheet, insert_at)
             print("Inserted Row:", row)
-            next_row_index += 1
+            # Keep local data in sync for subsequent inserts
+            existing_data.insert(insert_at - 1, row + [""] * 22)
+            # Ensure blank separator between different dates
+            if insert_at > 2:
+                ensure_separator_between(sheet, existing_data, insert_at - 1, insert_at)
+            if insert_at < len(existing_data):
+                ensure_separator_between(sheet, existing_data, insert_at, insert_at + 1)
 
         sheet.columns_auto_resize(0, 4)
 
