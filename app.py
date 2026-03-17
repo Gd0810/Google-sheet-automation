@@ -42,8 +42,63 @@ def format_sheet(sheet):
         "horizontalAlignment": "CENTER"
     })
 
-    # Set column width for a wider range
-    sheet.columns_auto_resize(0, 26)
+    # Wrap task text so line breaks show
+    sheet.format("B:B", {
+        "wrapStrategy": "WRAP"
+    })
+
+    # Set column widths for readability
+    requests = [
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": 1
+                },
+                "properties": {"pixelSize": 140},
+                "fields": "pixelSize"
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 1,
+                    "endIndex": 2
+                },
+                "properties": {"pixelSize": 520},
+                "fields": "pixelSize"
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 2,
+                    "endIndex": 4
+                },
+                "properties": {"pixelSize": 120},
+                "fields": "pixelSize"
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 4,
+                    "endIndex": 26
+                },
+                "properties": {"pixelSize": 80},
+                "fields": "pixelSize"
+            }
+        }
+    ]
+    sheet.spreadsheet.batch_update({"requests": requests})
 
 
 def get_month_sheet(date_string):
@@ -147,7 +202,7 @@ def parse_report(report_text):
     rows = []
     start_time = None
     end_time = None
-    task_text = ""
+    task_lines = []
 
     time_pattern = re.compile(r'(\d{1,2}:\d{2}\s*[AP]M)\s*[–-]\s*(\d{1,2}:\d{2}\s*[AP]M)')
 
@@ -162,18 +217,18 @@ def parse_report(report_text):
 
         if time_match:
 
-            if start_time and task_text:
-                rows.append([date, task_text.strip(), start_time, end_time])
+            if start_time and task_lines:
+                rows.append([date, "\n".join(task_lines).strip(), start_time, end_time])
 
             start_time = time_match.group(1)
             end_time = time_match.group(2)
-            task_text = ""
+            task_lines = []
 
         else:
-            task_text += " " + line
+            task_lines.append(line)
 
-    if start_time and task_text:
-        rows.append([date, task_text.strip(), start_time, end_time])
+    if start_time and task_lines:
+        rows.append([date, "\n".join(task_lines).strip(), start_time, end_time])
 
     return rows, date
 
