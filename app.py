@@ -37,9 +37,16 @@ def format_sheet(sheet):
         "horizontalAlignment": "CENTER"
     })
 
-    # Center align all columns (full width)
+    # Base alignment for all columns (full width)
     sheet.format("A:Z", {
-        "horizontalAlignment": "CENTER"
+        "horizontalAlignment": "CENTER",
+        "verticalAlignment": "MIDDLE"
+    })
+
+    # Task column: left align for readability
+    sheet.format("B:B", {
+        "horizontalAlignment": "LEFT",
+        "verticalAlignment": "MIDDLE"
     })
 
     # Wrap task text so line breaks show
@@ -69,7 +76,7 @@ def format_sheet(sheet):
                     "startIndex": 1,
                     "endIndex": 2
                 },
-                "properties": {"pixelSize": 520},
+                "properties": {"pixelSize": 700},
                 "fields": "pixelSize"
             }
         },
@@ -172,21 +179,27 @@ def insert_separator_row(sheet, row_number):
         }
     ]
 
-    # Remove the bottom border of the row above the separator
-    if row_number > 1:
-        requests.append({
-            "updateBorders": {
+    sheet.spreadsheet.batch_update({"requests": requests})
+
+
+def set_task_row_height(sheet, row_number, task_text):
+    line_count = max(1, task_text.count("\n") + 1)
+    # 28px base per line gives more readable spacing
+    pixel_size = 28 * line_count
+    requests = [
+        {
+            "updateDimensionProperties": {
                 "range": {
                     "sheetId": sheet.id,
-                    "startRowIndex": row_number - 2,
-                    "endRowIndex": row_number - 1,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": 26
+                    "dimension": "ROWS",
+                    "startIndex": row_number - 1,
+                    "endIndex": row_number
                 },
-                "bottom": {"style": "NONE"}
+                "properties": {"pixelSize": pixel_size},
+                "fields": "pixelSize"
             }
-        })
-
+        }
+    ]
     sheet.spreadsheet.batch_update({"requests": requests})
 
 
@@ -318,6 +331,9 @@ def ensure_separator_between(sheet, existing_data, upper_index, lower_index):
     if upper_date and lower_date and upper_date != lower_date:
         insert_separator_row(sheet, lower_index)
         existing_data.insert(lower_index - 1, [""] * 26)
+        # Re-apply borders to the date rows above and below the separator
+        add_row_border(sheet, upper_index)
+        add_row_border(sheet, lower_index + 1)
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -405,6 +421,7 @@ def index():
             insert_at = find_insert_index(existing_data, row[0].strip(), time_to_minutes(row[2]))
             sheet.insert_row(row + [""] * 22, insert_at)
             add_row_border(sheet, insert_at)
+            set_task_row_height(sheet, insert_at, row[1])
             print("Inserted Row:", row)
             # Keep local data in sync for subsequent inserts
             existing_data.insert(insert_at - 1, row + [""] * 22)
