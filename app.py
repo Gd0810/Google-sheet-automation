@@ -227,39 +227,155 @@ def add_data_row_batch(requests, sheet_id, row_number, row_values):
 
 
 def parse_report(report_text):
+    lines = [line.strip() for line in report_text.splitlines() if line.strip()]
 
-    date_match = re.search(r'Date:\s*(.*)', report_text)
-    date = date_match.group(1).replace("\r","").strip()
+    date = None
+    month_map = {
+        "jan": "January", "january": "January",
+        "feb": "February", "february": "February",
+        "mar": "March", "march": "March",
+        "apr": "April", "april": "April",
+        "may": "May",
+        "jun": "June", "june": "June",
+        "jul": "July", "july": "July",
+        "aug": "August", "august": "August",
+        "sep": "September", "sept": "September", "september": "September",
+        "oct": "October", "october": "October",
+        "nov": "November", "november": "November",
+        "dec": "December", "december": "December",
+    }
 
-    # Parsed date is logged by caller
+    def normalize_year(year_str):
+        if year_str is None or year_str == "":
+            return datetime.now().year
+        if len(year_str) == 2:
+            return 2000 + int(year_str)
+        return int(year_str)
 
-    lines = report_text.splitlines()
+    def parse_date_text(text):
+        t = text.strip().lower()
+        t = re.sub(r"(date\s*[:=\-]\s*)", "", t, flags=re.IGNORECASE).strip()
+        t = re.sub(r"(\d{1,2})(st|nd|rd|th)\b", r"\1", t)
+        t = t.replace(",", " ")
+        t = re.sub(r"\s+", " ", t)
+
+        # Year-first: 2026-04-01 / 2026/04/01 / 2026.04.01
+        m = re.match(r"^(?P<y>\d{4})[\/\-.](?P<m>\d{1,2})[\/\-.](?P<d>\d{1,2})$", t)
+        if m:
+            y = int(m.group("y"))
+            mo = int(m.group("m"))
+            d = int(m.group("d"))
+            return datetime(y, mo, d)
+
+        # Numeric: 1/4/2026 or 1-4-26 or 1.4
+        m = re.match(r"^(?P<d>\d{1,2})[\/\-.](?P<m>\d{1,2})(?:[\/\-.](?P<y>\d{2,4}))?$", t)
+        if m:
+            d = int(m.group("d"))
+            mo = int(m.group("m"))
+            if mo < 1 or mo > 12:
+                return None
+            y = normalize_year(m.group("y"))
+            try:
+                return datetime(y, mo, d)
+            except Exception:
+                return None
+
+        # Word month: 1 April 2026 or April 1 2026 or April 1
+        m = re.match(r"^(?P<d>\d{1,2})\s+(?P<m>[a-z]+)\s*(?P<y>\d{2,4})?$", t)
+        if m and m.group("m") in month_map:
+            d = int(m.group("d"))
+            mo = datetime.strptime(month_map[m.group("m")], "%B").month
+            y = normalize_year(m.group("y"))
+            return datetime(y, mo, d)
+
+        m = re.match(r"^(?P<m>[a-z]+)\s+(?P<d>\d{1,2})\s*(?P<y>\d{2,4})?$", t)
+        if m and m.group("m") in month_map:
+            d = int(m.group("d"))
+            mo = datetime.strptime(month_map[m.group("m")], "%B").month
+            y = normalize_year(m.group("y"))
+            return datetime(y, mo, d)
+
+        return None
+
+    for line in lines:
+        if re.search(r"date", line, re.IGNORECASE):
+            parsed = parse_date_text(line)
+            if parsed:
+                date = parsed
+                break
+
+    if date is None:
+        for line in lines:
+            parsed = parse_date_text(line)
+            if parsed:
+                date = parsed
+                break
+
+    if date is None:
+        raise ValueError("Date not found. Please include a date.")
+
+    date = date.strftime("%d %B %Y").lstrip("0")
 
     rows = []
     start_time = None
     end_time = None
     task_lines = []
 
-    time_pattern = re.compile(r'(\d{1,2}:\d{2}\s*[AP]M)\s*[–-]\s*(\d{1,2}:\d{2}\s*[AP]M)')
+    time_pattern = re.compile(
+        r"(?:time\s*[:=\-]\s*)?"
+        r"(\d{1,2}(?:[:\.]\d{1,2})?\s*(?:[AP]M?)?)\s*"
+        r"(?:-|–|—|to|~|→)\s*"
+        r"(\d{1,2}(?:[:\.]\d{1,2})?\s*(?:[AP]M?)?)",
+        re.IGNORECASE
+    )
+
+    def parse_time_parts(t):
+        t = re.sub(r"\s+", "", t.strip().upper())
+        t = t.replace(".", ":")
+        m = re.match(r"^(?P<h>\d{1,2})(?::(?P<m>\d{1,2}))?(?P<ampm>AM|PM)?$", t)
+        if not m:
+            raise ValueError(f"Invalid time: {t}")
+        hour = int(m.group("h"))
+        minute = int(m.group("m") or "00")
+        if minute > 59:
+            raise ValueError(f"Invalid minutes: {minute}")
+        ampm = m.group("ampm")
+        return hour, minute, ampm
+
+    def normalize_time(hour, minute, ampm):
+        ampm = ampm or "AM"
+        dt = datetime.strptime(f"{hour}:{minute:02d} {ampm}", "%I:%M %p")
+        return dt.strftime("%I:%M %p").lstrip("0")
 
     for line in lines:
-
-        line = line.strip()
-
-        if not line:
+        if line.lower().startswith("date"):
             continue
 
         time_match = time_pattern.search(line)
-
         if time_match:
-
             if start_time and task_lines:
                 rows.append([date, "\n".join(task_lines).strip(), start_time, end_time])
 
-            start_time = time_match.group(1)
-            end_time = time_match.group(2)
-            task_lines = []
+            sh, sm, sampm = parse_time_parts(time_match.group(1))
+            eh, em, eampm = parse_time_parts(time_match.group(2))
 
+            if sampm is None and eampm is not None:
+                sampm = eampm
+            if eampm is None and sampm is not None:
+                eampm = sampm
+
+            if sampm is None and eampm is None:
+                # Default to AM, but if end <= start, assume end is PM
+                sampm = "AM"
+                eampm = "AM"
+                start_minutes = (sh % 12) * 60 + sm
+                end_minutes = (eh % 12) * 60 + em
+                if end_minutes <= start_minutes:
+                    eampm = "PM"
+
+            start_time = normalize_time(sh, sm, sampm)
+            end_time = normalize_time(eh, em, eampm)
+            task_lines = []
         else:
             task_lines.append(line)
 
@@ -383,6 +499,15 @@ def submit():
             existing_data = sheet.get_all_values()
             yield emit("start", {"total": len(rows)})
 
+            if len(rows) == 0:
+                yield emit("done", {
+                    "success": False,
+                    "message": "No tasks found. Please add task lines after the time range.",
+                    "inserted": 0,
+                    "total": 0
+                })
+                return
+
             existing_slots = set()
             existing_ranges = {}
             for row in existing_data[1:]:
@@ -399,6 +524,7 @@ def submit():
                     existing_ranges.setdefault(row_date, []).append((start_m, end_m))
 
             rows_to_insert = []
+            skipped_count = 0
             for row in rows:
                 slot_key = (
                     row[0].strip(),
@@ -406,6 +532,7 @@ def submit():
                     normalize_time_string(row[3])
                 )
                 if slot_key in existing_slots:
+                    skipped_count += 1
                     yield emit("line", {"row": row, "status": "skipped", "reason": "Duplicate time slot"})
                     continue
 
@@ -413,6 +540,7 @@ def submit():
                     new_start = time_to_minutes(row[2])
                     new_end = time_to_minutes(row[3])
                 except Exception:
+                    skipped_count += 1
                     yield emit("line", {"row": row, "status": "skipped", "reason": "Invalid time range"})
                     continue
 
@@ -423,6 +551,7 @@ def submit():
                         break
 
                 if overlaps:
+                    skipped_count += 1
                     yield emit("line", {"row": row, "status": "skipped", "reason": "Overlapping time slot"})
                     continue
 
@@ -434,7 +563,7 @@ def submit():
             if not rows_to_insert:
                 yield emit("done", {
                     "success": False,
-                    "message": "No new rows to insert (duplicate or overlapping time slots).",
+                    "message": "All lines were skipped (duplicate or overlapping time slots).",
                     "inserted": 0,
                     "total": len(rows)
                 })
