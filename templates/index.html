@@ -1,22 +1,198 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Work Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
-<body>
+<body class="min-h-screen bg-slate-100 text-slate-900">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        <div class="mb-6">
+            <h1 class="text-2xl font-semibold tracking-tight">Daily Work Report</h1>
+            <p class="text-sm text-slate-600">Paste your report and submit to update the sheet.</p>
+        </div>
 
-<h2>Submit Daily Work Report</h2>
+        <form id="reportForm" method="POST" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <label for="report" class="block text-sm font-medium text-slate-700 mb-2">Report</label>
+            <textarea
+                id="report"
+                name="report"
+                rows="16"
+                class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Date: 2 April 2026&#10;Day: Thursday&#10;&#10;9:00 AM - 10:00 AM&#10;Task line 1&#10;Task line 2"
+            ></textarea>
 
-<form method="POST">
+            <div class="mt-4 flex items-center gap-3">
+                <button
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                    Submit Report
+                </button>
+                <span id="submitHint" class="text-sm text-slate-500">Live progress will appear below.</span>
+            </div>
+        </form>
 
-<textarea name="report" rows="20" cols="100" placeholder="Paste your report here"></textarea>
+        <div id="progressSection" class="mt-6 grid gap-4 hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-sm font-semibold text-slate-700">Progress</h2>
+                    <span id="progressText" class="text-xs text-slate-500">0 of 0 lines</span>
+                </div>
+                <div class="mt-3 w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div id="progressBar" class="bg-blue-600 h-3 transition-all duration-300" style="width: 0%;"></div>
+                </div>
+                <div id="finalMessage" class="mt-3 hidden text-sm font-medium text-emerald-600">
+                    Sheet updated successfully.
+                </div>
+            </div>
 
-<br><br>
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <h2 class="text-sm font-semibold text-slate-700 mb-3">Live Lines</h2>
+                <ul id="liveLines" class="text-sm text-slate-700 space-y-2"></ul>
+            </div>
 
-<button type="submit">Submit Report</button>
+            <div class="bg-slate-900 text-slate-100 rounded-xl p-4">
+                <h2 class="text-xs font-semibold text-slate-300 uppercase tracking-wide mb-2">Debug Logs</h2>
+                <pre id="logOutput" class="text-xs leading-relaxed whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+    </div>
 
-</form>
+    <script>
+        const form = document.getElementById("reportForm");
+        const progressSection = document.getElementById("progressSection");
+        const progressBar = document.getElementById("progressBar");
+        const progressText = document.getElementById("progressText");
+        const liveLines = document.getElementById("liveLines");
+        const logOutput = document.getElementById("logOutput");
+        const finalMessage = document.getElementById("finalMessage");
 
+        let totalLines = 0;
+        let processed = 0;
+
+        function updateProgress() {
+            const percent = totalLines > 0 ? Math.round((processed / totalLines) * 100) : 0;
+            progressBar.style.width = `${percent}%`;
+            progressText.textContent = `${processed} of ${totalLines} lines`;
+        }
+
+        function addLineItem(payload) {
+            const row = payload.row;
+            const status = payload.status;
+            const reason = payload.reason || "";
+            const li = document.createElement("li");
+            li.className = "rounded-lg border border-slate-200 p-3";
+
+            const header = document.createElement("div");
+            header.className = "flex items-start gap-2";
+
+            const dot = document.createElement("span");
+            dot.className = `mt-1 h-2 w-2 rounded-full ${status === "insert" ? "bg-emerald-500" : "bg-rose-500"}`;
+
+            const text = document.createElement("div");
+            text.className = "flex-1";
+            text.innerHTML = `<span class="font-medium">${row[0]}</span> • ${row[2]}-${row[3]} • ${row[1].replace(/\n/g, " / ")}`;
+
+            header.appendChild(dot);
+            header.appendChild(text);
+            li.appendChild(header);
+
+            if (status !== "insert") {
+                const reasonEl = document.createElement("div");
+                reasonEl.className = "mt-1 text-xs text-rose-600";
+                reasonEl.textContent = reason;
+                li.appendChild(reasonEl);
+            }
+
+            liveLines.appendChild(li);
+        }
+
+        function appendLog(message) {
+            logOutput.textContent += `${message}\n`;
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const formData = new FormData(form);
+
+            form.classList.add("hidden");
+            progressSection.classList.remove("hidden");
+            liveLines.innerHTML = "";
+            logOutput.textContent = "";
+            finalMessage.classList.add("hidden");
+            finalMessage.classList.remove("animate-pulse");
+
+            totalLines = 0;
+            processed = 0;
+            updateProgress();
+
+            const response = await fetch("/submit", {
+                method: "POST",
+                body: formData
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let buffer = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                const parts = buffer.split("\n\n");
+                buffer = parts.pop();
+
+                for (const part of parts) {
+                    const lines = part.split("\n");
+                    let eventType = "message";
+                    let dataLine = "";
+                    for (const line of lines) {
+                        if (line.startsWith("event:")) {
+                            eventType = line.replace("event:", "").trim();
+                        } else if (line.startsWith("data:")) {
+                            dataLine = line.replace("data:", "").trim();
+                        }
+                    }
+
+                    if (!dataLine) continue;
+                    const payload = JSON.parse(dataLine);
+
+                    if (eventType === "start") {
+                        totalLines = payload.total || 0;
+                        updateProgress();
+                    }
+
+                    if (eventType === "line") {
+                        processed += 1;
+                        addLineItem(payload);
+                        updateProgress();
+                    }
+
+                    if (eventType === "log") {
+                        appendLog(payload.message);
+                    }
+
+                    if (eventType === "done") {
+                        finalMessage.textContent = payload.message;
+                        finalMessage.classList.remove("hidden");
+                        finalMessage.classList.add(payload.success ? "text-emerald-600" : "text-rose-600");
+                        finalMessage.classList.add("animate-pulse");
+                        updateProgress();
+                    }
+
+                    if (eventType === "error") {
+                        finalMessage.textContent = payload.message;
+                        finalMessage.classList.remove("hidden");
+                        finalMessage.classList.add("text-rose-600");
+                        finalMessage.classList.add("animate-pulse");
+                    }
+                }
+            }
+        });
+    </script>
 </body>
 </html>

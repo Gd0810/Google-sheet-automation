@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, Response, stream_with_context
 import gspread
 import re
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import json
 
 app = Flask(__name__)
 
@@ -108,18 +109,20 @@ def format_sheet(sheet):
     sheet.spreadsheet.batch_update({"requests": requests})
 
 
-def get_month_sheet(date_string):
+def get_month_sheet(date_string, log=None):
 
     date_obj = datetime.strptime(date_string.strip(), "%d %B %Y")
     month_name = date_obj.strftime("%B")
 
     try:
         sheet = spreadsheet.worksheet(month_name)
-        print("Using existing sheet:", month_name)
+        if log:
+            log(f"Using existing sheet: {month_name}")
 
     except:
 
-        print("Creating new sheet:", month_name)
+        if log:
+            log(f"Creating new sheet: {month_name}")
 
         sheet = spreadsheet.add_worksheet(title=month_name, rows=1000, cols=4)
 
@@ -228,7 +231,7 @@ def parse_report(report_text):
     date_match = re.search(r'Date:\s*(.*)', report_text)
     date = date_match.group(1).replace("\r","").strip()
 
-    print("Parsed Date:", date)
+    # Parsed date is logged by caller
 
     lines = report_text.splitlines()
 
@@ -357,93 +360,114 @@ def ensure_separator_between(requests, sheet_id, existing_data, upper_index, low
             requests.append(build_row_border_request(sheet_id, lower_index + 1, style="SOLID"))
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
-
-    if request.method == "POST":
-
-        report = request.form["report"]
-
-        rows, date = parse_report(report)
-
-        sheet = get_month_sheet(date)
-
-        existing_data = sheet.get_all_values()
-
-        print("Current report date:", date)
-
-        # Build a set of existing (date, from, to) and time ranges to avoid duplicates/overlaps
-        existing_slots = set()
-        existing_ranges = {}
-        for row in existing_data[1:]:
-            if len(row) >= 4 and row[0].strip() != "":
-                row_date = row[0].strip()
-                from_norm = normalize_time_string(row[2])
-                to_norm = normalize_time_string(row[3])
-                existing_slots.add((row_date, from_norm, to_norm))
-                try:
-                    start_m = time_to_minutes(row[2])
-                    end_m = time_to_minutes(row[3])
-                except Exception:
-                    continue
-                existing_ranges.setdefault(row_date, []).append((start_m, end_m))
-
-        rows_to_insert = []
-        for row in rows:
-            slot_key = (
-                row[0].strip(),
-                normalize_time_string(row[2]),
-                normalize_time_string(row[3])
-            )
-            if slot_key in existing_slots:
-                print("Duplicate slot skipped:", row)
-                continue
-            try:
-                new_start = time_to_minutes(row[2])
-                new_end = time_to_minutes(row[3])
-            except Exception:
-                print("Invalid time range skipped:", row)
-                continue
-
-            overlaps = False
-            for existing_start, existing_end in existing_ranges.get(row[0].strip(), []):
-                if time_ranges_overlap(new_start, new_end, existing_start, existing_end):
-                    overlaps = True
-                    break
-
-            if overlaps:
-                print("Overlapping slot skipped:", row)
-                continue
-
-            existing_slots.add(slot_key)
-            existing_ranges.setdefault(row[0].strip(), []).append((new_start, new_end))
-            rows_to_insert.append(row)
-
-        if not rows_to_insert:
-            return "No new rows to insert (duplicate time slots)."
-
-        rows_to_insert.sort(key=lambda r: (date_to_key(r[0]), time_to_minutes(r[2])))
-
-        batch_requests = []
-
-        for row in rows_to_insert:
-            insert_at = find_insert_index(existing_data, row[0].strip(), time_to_minutes(row[2]))
-            add_data_row_batch(batch_requests, sheet.id, insert_at, row)
-            print("Inserted Row:", row)
-            # Keep local data in sync for subsequent inserts
-            existing_data.insert(insert_at - 1, pad_row(row))
-            # Ensure blank separator between different dates
-            if insert_at > 2:
-                ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at - 1, insert_at)
-            if insert_at < len(existing_data):
-                ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at, insert_at + 1)
-
-        if batch_requests:
-            sheet.spreadsheet.batch_update({"requests": batch_requests})
-
-        return "Report Saved Successfully!"
-
     return render_template("index.html")
+
+
+@app.route("/submit", methods=["POST"])
+def submit():
+    report = request.form["report"]
+
+    def stream():
+        def emit(event_type, payload):
+            return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
+
+        try:
+            rows, date = parse_report(report)
+            yield emit("log", {"message": f"Parsed Date: {date}"})
+
+            sheet = get_month_sheet(date, log=lambda m: None)
+            yield emit("log", {"message": f"Using sheet: {sheet.title}"})
+
+            existing_data = sheet.get_all_values()
+            yield emit("start", {"total": len(rows)})
+
+            existing_slots = set()
+            existing_ranges = {}
+            for row in existing_data[1:]:
+                if len(row) >= 4 and row[0].strip() != "":
+                    row_date = row[0].strip()
+                    from_norm = normalize_time_string(row[2])
+                    to_norm = normalize_time_string(row[3])
+                    existing_slots.add((row_date, from_norm, to_norm))
+                    try:
+                        start_m = time_to_minutes(row[2])
+                        end_m = time_to_minutes(row[3])
+                    except Exception:
+                        continue
+                    existing_ranges.setdefault(row_date, []).append((start_m, end_m))
+
+            rows_to_insert = []
+            for row in rows:
+                slot_key = (
+                    row[0].strip(),
+                    normalize_time_string(row[2]),
+                    normalize_time_string(row[3])
+                )
+                if slot_key in existing_slots:
+                    yield emit("line", {"row": row, "status": "skipped", "reason": "Duplicate time slot"})
+                    continue
+
+                try:
+                    new_start = time_to_minutes(row[2])
+                    new_end = time_to_minutes(row[3])
+                except Exception:
+                    yield emit("line", {"row": row, "status": "skipped", "reason": "Invalid time range"})
+                    continue
+
+                overlaps = False
+                for existing_start, existing_end in existing_ranges.get(row[0].strip(), []):
+                    if time_ranges_overlap(new_start, new_end, existing_start, existing_end):
+                        overlaps = True
+                        break
+
+                if overlaps:
+                    yield emit("line", {"row": row, "status": "skipped", "reason": "Overlapping time slot"})
+                    continue
+
+                existing_slots.add(slot_key)
+                existing_ranges.setdefault(row[0].strip(), []).append((new_start, new_end))
+                rows_to_insert.append(row)
+                yield emit("line", {"row": row, "status": "insert"})
+
+            if not rows_to_insert:
+                yield emit("done", {
+                    "success": False,
+                    "message": "No new rows to insert (duplicate or overlapping time slots).",
+                    "inserted": 0,
+                    "total": len(rows)
+                })
+                return
+
+            rows_to_insert.sort(key=lambda r: (date_to_key(r[0]), time_to_minutes(r[2])))
+
+            batch_requests = []
+            for row in rows_to_insert:
+                insert_at = find_insert_index(existing_data, row[0].strip(), time_to_minutes(row[2]))
+                add_data_row_batch(batch_requests, sheet.id, insert_at, row)
+                existing_data.insert(insert_at - 1, pad_row(row))
+                if insert_at > 2:
+                    ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at - 1, insert_at)
+                if insert_at < len(existing_data):
+                    ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at, insert_at + 1)
+
+            if batch_requests:
+                sheet.spreadsheet.batch_update({"requests": batch_requests})
+
+            yield emit("done", {
+                "success": True,
+                "message": "Sheet updated successfully.",
+                "inserted": len(rows_to_insert),
+                "total": len(rows)
+            })
+        except Exception as exc:
+            yield emit("error", {"message": str(exc)})
+
+    response = Response(stream_with_context(stream()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 if __name__ == "__main__":
