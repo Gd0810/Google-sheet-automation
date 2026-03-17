@@ -207,6 +207,24 @@ def index():
         print("Last date in sheet:", last_date)
         print("Current report date:", date)
 
+        # Build a set of existing (date, from, to) to avoid duplicates
+        existing_slots = set()
+        for row in existing_data[1:]:
+            if len(row) >= 4 and row[0].strip() != "":
+                existing_slots.add((row[0].strip(), row[2].strip(), row[3].strip()))
+
+        rows_to_insert = []
+        for row in rows:
+            slot_key = (row[0].strip(), row[2].strip(), row[3].strip())
+            if slot_key in existing_slots:
+                print("Duplicate slot skipped:", row)
+                continue
+            existing_slots.add(slot_key)
+            rows_to_insert.append(row)
+
+        if not rows_to_insert:
+            return "No new rows to insert (duplicate time slots)."
+
         # If new date detected, insert blank row
         next_row_index = last_data_row_index + 1
 
@@ -215,7 +233,7 @@ def index():
             insert_separator_row(sheet, next_row_index)
             next_row_index += 1
 
-        for row in rows:
+        for row in rows_to_insert:
             sheet.insert_row(row + [""] * 22, next_row_index)
             add_row_border(sheet, next_row_index)
             print("Inserted Row:", row)
