@@ -190,6 +190,11 @@ def time_to_minutes(value):
     return dt.hour * 60 + dt.minute
 
 
+def time_ranges_overlap(start_a, end_a, start_b, end_b):
+    # Overlap if ranges intersect (end is exclusive)
+    return start_a < end_b and start_b < end_a
+
+
 def date_to_key(value):
     cleaned = value.strip()
     dt = datetime.strptime(cleaned, "%d %B %Y")
@@ -289,15 +294,21 @@ def index():
         print("Last date in sheet:", last_date)
         print("Current report date:", date)
 
-        # Build a set of existing (date, from, to) to avoid duplicates
+        # Build a set of existing (date, from, to) and time ranges to avoid duplicates/overlaps
         existing_slots = set()
+        existing_ranges = {}
         for row in existing_data[1:]:
             if len(row) >= 4 and row[0].strip() != "":
-                existing_slots.add((
-                    row[0].strip(),
-                    normalize_time_string(row[2]),
-                    normalize_time_string(row[3])
-                ))
+                row_date = row[0].strip()
+                from_norm = normalize_time_string(row[2])
+                to_norm = normalize_time_string(row[3])
+                existing_slots.add((row_date, from_norm, to_norm))
+                try:
+                    start_m = time_to_minutes(row[2])
+                    end_m = time_to_minutes(row[3])
+                except Exception:
+                    continue
+                existing_ranges.setdefault(row_date, []).append((start_m, end_m))
 
         rows_to_insert = []
         for row in rows:
@@ -309,7 +320,25 @@ def index():
             if slot_key in existing_slots:
                 print("Duplicate slot skipped:", row)
                 continue
+            try:
+                new_start = time_to_minutes(row[2])
+                new_end = time_to_minutes(row[3])
+            except Exception:
+                print("Invalid time range skipped:", row)
+                continue
+
+            overlaps = False
+            for existing_start, existing_end in existing_ranges.get(row[0].strip(), []):
+                if time_ranges_overlap(new_start, new_end, existing_start, existing_end):
+                    overlaps = True
+                    break
+
+            if overlaps:
+                print("Overlapping slot skipped:", row)
+                continue
+
             existing_slots.add(slot_key)
+            existing_ranges.setdefault(row[0].strip(), []).append((new_start, new_end))
             rows_to_insert.append(row)
 
         if not rows_to_insert:
