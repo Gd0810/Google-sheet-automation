@@ -131,76 +131,96 @@ def get_month_sheet(date_string):
     return sheet
 
 
-def add_row_border(sheet, row_number):
+TOTAL_COLS = 26
 
-    sheet.format(f"A{row_number}:Z{row_number}", {
-        "borders": {
-            "top": {"style": "SOLID"},
-            "bottom": {"style": "SOLID"},
-            "left": {"style": "SOLID"},
-            "right": {"style": "SOLID"}
+
+def pad_row(values, total_cols=TOTAL_COLS):
+    if len(values) >= total_cols:
+        return values[:total_cols]
+    return values + [""] * (total_cols - len(values))
+
+
+def build_insert_row_request(sheet_id, row_number):
+    return {
+        "insertDimension": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": row_number - 1,
+                "endIndex": row_number
+            },
+            "inheritFromBefore": False
         }
-    })
+    }
 
 
-def insert_separator_row(sheet, row_number):
+def build_update_cells_request(sheet_id, row_number, values):
+    padded = pad_row(values)
+    cell_values = []
+    for value in padded:
+        cell_values.append({"userEnteredValue": {"stringValue": str(value)}})
+    return {
+        "updateCells": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_number - 1,
+                "endRowIndex": row_number,
+                "startColumnIndex": 0,
+                "endColumnIndex": TOTAL_COLS
+            },
+            "rows": [{"values": cell_values}],
+            "fields": "userEnteredValue"
+        }
+    }
+
+
+def build_row_border_request(sheet_id, row_number, style="SOLID"):
+    return {
+        "updateBorders": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_number - 1,
+                "endRowIndex": row_number,
+                "startColumnIndex": 0,
+                "endColumnIndex": TOTAL_COLS
+            },
+            "top": {"style": style},
+            "bottom": {"style": style},
+            "left": {"style": style},
+            "right": {"style": style}
+        }
+    }
+
+
+def build_row_height_request(sheet_id, row_number, pixel_size):
+    return {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": row_number - 1,
+                "endIndex": row_number
+            },
+            "properties": {"pixelSize": pixel_size},
+            "fields": "pixelSize"
+        }
+    }
+
+
+def insert_separator_row_batch(requests, sheet_id, row_number):
     # Insert a visible gap row with no borders and a taller height
-    sheet.insert_row(["", "", "", ""] + [""] * 22, row_number)
-
-    requests = [
-        {
-            "updateBorders": {
-                "range": {
-                    "sheetId": sheet.id,
-                    "startRowIndex": row_number - 1,
-                    "endRowIndex": row_number,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": 26
-                },
-                "top": {"style": "NONE"},
-                "bottom": {"style": "NONE"},
-                "left": {"style": "NONE"},
-                "right": {"style": "NONE"},
-                "innerHorizontal": {"style": "NONE"},
-                "innerVertical": {"style": "NONE"}
-            }
-        },
-        {
-            "updateDimensionProperties": {
-                "range": {
-                    "sheetId": sheet.id,
-                    "dimension": "ROWS",
-                    "startIndex": row_number - 1,
-                    "endIndex": row_number
-                },
-                "properties": {"pixelSize": 24},
-                "fields": "pixelSize"
-            }
-        }
-    ]
-
-    sheet.spreadsheet.batch_update({"requests": requests})
+    requests.append(build_insert_row_request(sheet_id, row_number))
+    requests.append(build_update_cells_request(sheet_id, row_number, [""] * TOTAL_COLS))
+    requests.append(build_row_border_request(sheet_id, row_number, style="NONE"))
+    requests.append(build_row_height_request(sheet_id, row_number, 24))
 
 
-def set_task_row_height(sheet, row_number, task_text):
-    line_count = max(1, task_text.count("\n") + 1)
-    # 28px base per line gives more readable spacing
-    pixel_size = 28 * line_count
-    requests = [
-        {
-            "updateDimensionProperties": {
-                "range": {
-                    "sheetId": sheet.id,
-                    "dimension": "ROWS",
-                    "startIndex": row_number - 1,
-                    "endIndex": row_number
-                },
-                "properties": {"pixelSize": pixel_size},
-                "fields": "pixelSize"
-            }
-        }
-    ]
-    sheet.spreadsheet.batch_update({"requests": requests})
+def add_data_row_batch(requests, sheet_id, row_number, row_values):
+    requests.append(build_insert_row_request(sheet_id, row_number))
+    requests.append(build_update_cells_request(sheet_id, row_number, row_values))
+    requests.append(build_row_border_request(sheet_id, row_number, style="SOLID"))
+    line_count = max(1, row_values[1].count("\n") + 1)
+    requests.append(build_row_height_request(sheet_id, row_number, 28 * line_count))
 
 
 def parse_report(report_text):
@@ -314,7 +334,7 @@ def find_insert_index(existing_data, date_value, start_minutes):
     return len(existing_data) + 1
 
 
-def ensure_separator_between(sheet, existing_data, upper_index, lower_index):
+def ensure_separator_between(requests, sheet_id, existing_data, upper_index, lower_index):
     # upper_index and lower_index are 1-based, and should be adjacent
     if lower_index != upper_index + 1:
         return
@@ -329,11 +349,12 @@ def ensure_separator_between(sheet, existing_data, upper_index, lower_index):
     lower_date = get_row_date(lower_row)
 
     if upper_date and lower_date and upper_date != lower_date:
-        insert_separator_row(sheet, lower_index)
-        existing_data.insert(lower_index - 1, [""] * 26)
+        insert_separator_row_batch(requests, sheet_id, lower_index)
+        existing_data.insert(lower_index - 1, [""] * TOTAL_COLS)
         # Re-apply borders to the date rows above and below the separator
-        add_row_border(sheet, upper_index)
-        add_row_border(sheet, lower_index + 1)
+        requests.append(build_row_border_request(sheet_id, upper_index, style="SOLID"))
+        if lower_index + 1 <= len(existing_data):
+            requests.append(build_row_border_request(sheet_id, lower_index + 1, style="SOLID"))
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -349,20 +370,6 @@ def index():
 
         existing_data = sheet.get_all_values()
 
-        last_date = None
-        last_data_row_index = 0
-
-        # Track the last non-empty row and last date (ignore header row)
-        for idx, row in enumerate(existing_data, start=1):
-            if any(cell.strip() != "" for cell in row):
-                last_data_row_index = idx
-
-        for row in reversed(existing_data[1:]):
-            if len(row) > 0 and row[0].strip() != "" and row[0].strip().lower() != "date":
-                last_date = row[0].strip()
-                break
-
-        print("Last date in sheet:", last_date)
         print("Current report date:", date)
 
         # Build a set of existing (date, from, to) and time ranges to avoid duplicates/overlaps
@@ -417,21 +424,22 @@ def index():
 
         rows_to_insert.sort(key=lambda r: (date_to_key(r[0]), time_to_minutes(r[2])))
 
+        batch_requests = []
+
         for row in rows_to_insert:
             insert_at = find_insert_index(existing_data, row[0].strip(), time_to_minutes(row[2]))
-            sheet.insert_row(row + [""] * 22, insert_at)
-            add_row_border(sheet, insert_at)
-            set_task_row_height(sheet, insert_at, row[1])
+            add_data_row_batch(batch_requests, sheet.id, insert_at, row)
             print("Inserted Row:", row)
             # Keep local data in sync for subsequent inserts
-            existing_data.insert(insert_at - 1, row + [""] * 22)
+            existing_data.insert(insert_at - 1, pad_row(row))
             # Ensure blank separator between different dates
             if insert_at > 2:
-                ensure_separator_between(sheet, existing_data, insert_at - 1, insert_at)
+                ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at - 1, insert_at)
             if insert_at < len(existing_data):
-                ensure_separator_between(sheet, existing_data, insert_at, insert_at + 1)
+                ensure_separator_between(batch_requests, sheet.id, existing_data, insert_at, insert_at + 1)
 
-        sheet.columns_auto_resize(0, 4)
+        if batch_requests:
+            sheet.spreadsheet.batch_update({"requests": batch_requests})
 
         return "Report Saved Successfully!"
 
