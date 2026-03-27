@@ -145,7 +145,8 @@
         .danger { color: var(--red); }
 
         textarea,
-        input {
+        input,
+        select {
             width: 100%;
             background: #000;
             color: var(--green);
@@ -156,7 +157,8 @@
         }
 
         textarea:focus,
-        input:focus {
+        input:focus,
+        select:focus {
             border-color: var(--green);
             box-shadow: 0 0 0 1px var(--green), 0 0 14px rgba(0,255,156,0.15);
         }
@@ -239,8 +241,18 @@
 
                         <div class="mt-5 grid gap-4 lg:grid-cols-[minmax(0,260px)_minmax(0,260px)_1fr]">
                             <section class="panel p-4">
-                                <div class="text-xs tracking-[0.2em] muted mb-3">// MONTHS</div>
-                                <div id="monthsList" class="space-y-3"></div>
+                                <div class="text-xs tracking-[0.2em] muted mb-3">// YEAR / MONTH FILTER</div>
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs muted mb-2">YEAR</label>
+                                        <select id="yearSelect"></select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs muted mb-2">MONTH</label>
+                                        <select id="monthSelect"></select>
+                                    </div>
+                                    <div id="monthsSummary" class="text-xs muted"></div>
+                                </div>
                             </section>
 
                             <section class="panel p-4">
@@ -296,9 +308,12 @@
 
     <script>
         const state = {
+            years: [],
+            monthsByYear: {},
             months: [],
             dates: [],
             reports: [],
+            selectedYear: '',
             selectedMonth: '',
             selectedDate: '',
             selectedReport: null,
@@ -321,7 +336,10 @@
         }
 
         function updatePathLabels() {
-            document.getElementById('selectedMonthLabel').textContent = state.selectedMonth || '--';
+            const monthLabel = state.selectedYear && state.selectedMonth
+                ? `${state.selectedMonth} ${state.selectedYear}`
+                : (state.selectedMonth || '--');
+            document.getElementById('selectedMonthLabel').textContent = monthLabel;
             document.getElementById('selectedDateLabel').textContent = state.selectedDate || '--';
         }
 
@@ -343,26 +361,44 @@
             document.getElementById('editTask').value = report.task;
         }
 
-        function renderMonths() {
-            const container = document.getElementById('monthsList');
-            if (!state.months.length) {
-                container.innerHTML = '<div class="muted text-sm">No month sheets found.</div>';
+        function renderMonthControls() {
+            const yearSelect = document.getElementById('yearSelect');
+            const monthSelect = document.getElementById('monthSelect');
+            const summary = document.getElementById('monthsSummary');
+
+            if (!state.years.length) {
+                yearSelect.innerHTML = '<option value="">No year found</option>';
+                monthSelect.innerHTML = '<option value="">No month found</option>';
+                summary.textContent = 'No years or months found in Google Sheet.';
                 return;
             }
 
-            container.innerHTML = state.months.map(month => `
-                <button class="item-card w-full text-left p-3 ${state.selectedMonth === month.name ? 'selected-green' : ''}"
-                    onclick="selectMonth('${month.name}')">
-                    <div class="vt text-2xl tracking-[0.12em]">${month.name}</div>
-                    <div class="text-xs muted mt-1">${month.date_count} dates :: ${month.report_count} reports</div>
-                </button>
-            `).join('');
+            yearSelect.innerHTML = [
+                '<option value="">Select year</option>',
+                ...state.years.map(year => `<option value="${year}" ${String(state.selectedYear) === String(year) ? 'selected' : ''}>${year}</option>`)
+            ].join('');
+
+            if (!state.months.length) {
+                monthSelect.innerHTML = '<option value="">Select month</option>';
+                summary.textContent = state.selectedYear
+                    ? `No months found for ${state.selectedYear}.`
+                    : 'Select a year to load months.';
+                return;
+            }
+
+            monthSelect.innerHTML = [
+                '<option value="">Select month</option>',
+                ...state.months.map(month => `<option value="${month.name}" ${state.selectedMonth === month.name ? 'selected' : ''}>${month.name} :: ${month.date_count} dates :: ${month.report_count} reports</option>`)
+            ].join('');
+            summary.textContent = state.selectedYear
+                ? `${state.months.length} month sheets found for ${state.selectedYear}.`
+                : 'Select a year to load months.';
         }
 
         function renderDates() {
             const container = document.getElementById('datesList');
-            if (!state.selectedMonth) {
-                container.innerHTML = '<div class="muted text-sm">Select a month to load dates.</div>';
+            if (!state.selectedYear || !state.selectedMonth) {
+                container.innerHTML = '<div class="muted text-sm">Select year and month to load dates.</div>';
                 return;
             }
             if (!state.dates.length) {
@@ -418,30 +454,61 @@
         async function loadMonths() {
             setStatus('Loading month archive...', 'muted');
             const payload = await fetchJson('/dashboard/api/months');
-            state.months = payload.months || [];
-            renderMonths();
+            state.years = payload.years || [];
+            state.monthsByYear = payload.months_by_year || {};
+            state.months = state.selectedYear ? (state.monthsByYear[String(state.selectedYear)] || []) : [];
+            renderMonthControls();
             renderDates();
             renderReports();
-            document.getElementById('mainTitle').textContent = 'MONTH ARCHIVE';
+            document.getElementById('mainTitle').textContent = 'YEAR / MONTH ARCHIVE';
             setStatus('Month archive loaded from Google Sheet.', 'muted');
+        }
+
+        function selectYear(yearValue) {
+            state.selectedYear = yearValue;
+            state.selectedMonth = '';
+            state.selectedDate = '';
+            state.selectedReport = null;
+            state.dates = [];
+            state.reports = [];
+            state.months = yearValue ? (state.monthsByYear[String(yearValue)] || []) : [];
+            updatePathLabels();
+            clearForm();
+            renderMonthControls();
+            renderDates();
+            renderReports();
+            document.getElementById('mainTitle').textContent = yearValue
+                ? `${yearValue} :: MONTHS`
+                : 'YEAR / MONTH ARCHIVE';
+            setStatus(yearValue ? `Loaded months for ${yearValue}.` : 'Select a year to continue.', 'muted');
         }
 
         async function selectMonth(monthName) {
             state.selectedMonth = monthName;
             state.selectedDate = '';
             state.selectedReport = null;
+            state.dates = [];
             state.reports = [];
             updatePathLabels();
             clearForm();
-            renderMonths();
+            renderMonthControls();
+            renderDates();
             renderReports();
-            document.getElementById('mainTitle').textContent = `${monthName.toUpperCase()} :: DATES`;
-            setStatus(`Loading dates for ${monthName}...`, 'amber');
+            if (!state.selectedYear || !monthName) {
+                document.getElementById('mainTitle').textContent = state.selectedYear
+                    ? `${state.selectedYear} :: MONTHS`
+                    : 'YEAR / MONTH ARCHIVE';
+                setStatus('Select a month to continue.', 'muted');
+                return;
+            }
 
-            const payload = await fetchJson(`/dashboard/api/dates?month=${encodeURIComponent(monthName)}`);
+            document.getElementById('mainTitle').textContent = `${monthName.toUpperCase()} ${state.selectedYear} :: DATES`;
+            setStatus(`Loading dates for ${monthName} ${state.selectedYear}...`, 'amber');
+
+            const payload = await fetchJson(`/dashboard/api/dates?year=${encodeURIComponent(state.selectedYear)}&month=${encodeURIComponent(monthName)}`);
             state.dates = payload.dates || [];
             renderDates();
-            setStatus(`Loaded ${state.dates.length} dates from ${monthName}.`, 'muted');
+            setStatus(`Loaded ${state.dates.length} dates from ${monthName} ${state.selectedYear}.`, 'muted');
         }
 
         async function selectDate(dateValue) {
@@ -451,10 +518,10 @@
             clearForm();
             renderDates();
             document.getElementById('editDate').value = dateValue;
-            document.getElementById('mainTitle').textContent = `${state.selectedMonth.toUpperCase()} :: ${dateValue.toUpperCase()}`;
+            document.getElementById('mainTitle').textContent = `${state.selectedMonth.toUpperCase()} ${state.selectedYear} :: ${dateValue.toUpperCase()}`;
             setStatus(`Loading reports for ${dateValue}...`, 'amber');
 
-            const payload = await fetchJson(`/dashboard/api/reports?month=${encodeURIComponent(state.selectedMonth)}&date=${encodeURIComponent(dateValue)}`);
+            const payload = await fetchJson(`/dashboard/api/reports?year=${encodeURIComponent(state.selectedYear)}&month=${encodeURIComponent(state.selectedMonth)}&date=${encodeURIComponent(dateValue)}`);
             state.reports = payload.reports || [];
             renderReports();
             setStatus(`Loaded ${state.reports.length} reports for ${dateValue}.`, 'muted');
@@ -541,14 +608,26 @@
         }
 
         document.getElementById('refreshBtn').addEventListener('click', async () => {
+            state.selectedYear = '';
             state.selectedMonth = '';
             state.selectedDate = '';
             state.selectedReport = null;
+            state.months = [];
             state.dates = [];
             state.reports = [];
             updatePathLabels();
             clearForm();
             await loadMonths();
+        });
+
+        document.getElementById('yearSelect').addEventListener('change', (event) => {
+            selectYear(event.target.value);
+        });
+
+        document.getElementById('monthSelect').addEventListener('change', (event) => {
+            selectMonth(event.target.value).catch(error => {
+                setStatus(error.message || 'Failed to load month.', 'danger');
+            });
         });
 
         document.getElementById('editForm').addEventListener('submit', saveReport);

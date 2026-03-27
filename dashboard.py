@@ -68,6 +68,7 @@ def get_report_rows(sheet):
             "task": task_value,
             "from_time": from_value,
             "to_time": to_value,
+            "year": parse_date_value(date_value).year,
         })
 
     return entries
@@ -107,7 +108,8 @@ def dashboard_home():
 
 @dashboard_bp.route("/dashboard/api/months", methods=["GET"])
 def get_months():
-    months = []
+    years = set()
+    months_by_year = {}
 
     for worksheet in spreadsheet.worksheets():
         try:
@@ -119,32 +121,58 @@ def get_months():
         if not entries:
             continue
 
-        unique_dates = {entry["date"] for entry in entries}
-        months.append({
-            "name": worksheet.title,
-            "month_order": month_order,
-            "report_count": len(entries),
-            "date_count": len(unique_dates),
-        })
+        year_groups = {}
+        for entry in entries:
+            year_groups.setdefault(entry["year"], [])
+            year_groups[entry["year"]].append(entry)
 
-    months.sort(key=lambda item: item["month_order"])
-    return jsonify({"months": months})
+        for year_value, year_entries in year_groups.items():
+            years.add(year_value)
+            months_by_year.setdefault(year_value, [])
+            unique_dates = {entry["date"] for entry in year_entries}
+            months_by_year[year_value].append({
+                "name": worksheet.title,
+                "month_order": month_order,
+                "report_count": len(year_entries),
+                "date_count": len(unique_dates),
+            })
+
+    normalized_months = {}
+    for year_value, months in months_by_year.items():
+        deduped = {}
+        for month in months:
+            deduped[month["name"]] = month
+        normalized_months[str(year_value)] = sorted(
+            deduped.values(),
+            key=lambda item: item["month_order"]
+        )
+
+    return jsonify({
+        "years": sorted(years),
+        "months_by_year": normalized_months,
+    })
 
 
 @dashboard_bp.route("/dashboard/api/dates", methods=["GET"])
 def get_dates():
     month_name = request.args.get("month", "").strip()
-    if not month_name:
-        return jsonify({"error": "Month is required."}), 400
+    year_value = request.args.get("year", "").strip()
+    if not month_name or not year_value:
+        return jsonify({"error": "Month and year are required."}), 400
 
     try:
         sheet = get_sheet(month_name)
+        year_number = int(year_value)
     except gspread.WorksheetNotFound:
         return jsonify({"error": "Month sheet not found."}), 404
+    except ValueError:
+        return jsonify({"error": "Invalid year."}), 400
 
     entries = get_report_rows(sheet)
     grouped = {}
     for entry in entries:
+        if entry["year"] != year_number:
+            continue
         grouped.setdefault(entry["date"], 0)
         grouped[entry["date"]] += 1
 
@@ -154,31 +182,35 @@ def get_dates():
     ]
     dates.sort(key=lambda item: parse_date_value(item["date"]))
 
-    return jsonify({"month": month_name, "dates": dates})
+    return jsonify({"month": month_name, "year": year_number, "dates": dates})
 
 
 @dashboard_bp.route("/dashboard/api/reports", methods=["GET"])
 def get_reports():
     month_name = request.args.get("month", "").strip()
     date_value = request.args.get("date", "").strip()
+    year_value = request.args.get("year", "").strip()
 
-    if not month_name or not date_value:
-        return jsonify({"error": "Month and date are required."}), 400
+    if not month_name or not date_value or not year_value:
+        return jsonify({"error": "Month, year, and date are required."}), 400
 
     try:
         sheet = get_sheet(month_name)
+        year_number = int(year_value)
     except gspread.WorksheetNotFound:
         return jsonify({"error": "Month sheet not found."}), 404
+    except ValueError:
+        return jsonify({"error": "Invalid year."}), 400
 
     normalized_date = normalize_date_string(date_value)
     reports = [
         entry
         for entry in get_report_rows(sheet)
-        if normalize_date_string(entry["date"]) == normalized_date
+        if entry["year"] == year_number and normalize_date_string(entry["date"]) == normalized_date
     ]
 
     reports.sort(key=lambda item: datetime.strptime(item["from_time"], "%I:%M %p"))
-    return jsonify({"month": month_name, "date": normalized_date, "reports": reports})
+    return jsonify({"month": month_name, "year": year_number, "date": normalized_date, "reports": reports})
 
 
 @dashboard_bp.route("/dashboard/api/report/update", methods=["POST"])
