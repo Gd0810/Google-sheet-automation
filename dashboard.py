@@ -101,6 +101,15 @@ def cleanup_separators(sheet):
         sheet.delete_rows(row_number)
 
 
+def get_matching_date_rows(sheet, year_number, date_value):
+    normalized_date = normalize_date_string(date_value)
+    return [
+        entry["row_number"]
+        for entry in get_report_rows(sheet)
+        if entry["year"] == year_number and normalize_date_string(entry["date"]) == normalized_date
+    ]
+
+
 @dashboard_bp.route("/dashboard", methods=["GET"])
 def dashboard_home():
     return render_template("dashboard.html")
@@ -298,4 +307,39 @@ def delete_report():
     return jsonify({
         "success": True,
         "message": "Report deleted successfully.",
+    })
+
+
+@dashboard_bp.route("/dashboard/api/date/delete", methods=["POST"])
+def delete_date():
+    payload = request.get_json(silent=True) or {}
+
+    month_name = str(payload.get("month", "")).strip()
+    date_value = str(payload.get("date", "")).strip()
+    year_value = str(payload.get("year", "")).strip()
+
+    if not month_name or not date_value or not year_value:
+        return jsonify({"error": "Month, year, and date are required."}), 400
+
+    try:
+        sheet = get_sheet(month_name)
+        year_number = int(year_value)
+        row_numbers = get_matching_date_rows(sheet, year_number, date_value)
+    except gspread.WorksheetNotFound:
+        return jsonify({"error": "Month sheet not found."}), 404
+    except ValueError:
+        return jsonify({"error": "Invalid year or date."}), 400
+
+    if not row_numbers:
+        return jsonify({"error": "No reports found for this date."}), 404
+
+    for row_number in reversed(row_numbers):
+        sheet.delete_rows(row_number)
+
+    cleanup_separators(sheet)
+
+    return jsonify({
+        "success": True,
+        "message": "All reports for the date were deleted successfully.",
+        "deleted_count": len(row_numbers),
     })
