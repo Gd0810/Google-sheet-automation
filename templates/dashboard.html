@@ -176,12 +176,25 @@
 
         .sidebar-button {
             width: 100%;
+            display: block;
             text-align: left;
             border: 1px solid transparent;
             background: transparent;
             color: var(--green);
             padding: 12px 14px;
             transition: 0.2s ease;
+        }
+
+        .sidebar-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            border: 1px solid #10311f;
+            background: rgba(0,255,156,0.02);
+        }
+
+        .sidebar-stack .sidebar-button + .sidebar-button {
+            border-top: 1px solid #10311f;
         }
 
         .sidebar-button:hover,
@@ -233,7 +246,7 @@
                 <div class="grid md:grid-cols-[260px_1fr] min-h-[760px]">
                     <aside class="border-r border-[#10311f] p-4 bg-[rgba(2,15,7,0.78)]">
                         <div class="text-xs tracking-[0.2em] muted mb-3">// SIDEBAR</div>
-                        <div class="space-y-3">
+                        <div class="sidebar-stack">
                             <a href="/dashboard" id="reportsNav" class="sidebar-button active">[ REPORTS ]</a>
                             <a href="/users" class="sidebar-button">[ USERS ]</a>
                         </div>
