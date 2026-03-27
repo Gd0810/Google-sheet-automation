@@ -19,6 +19,8 @@ spreadsheet = client.open("Girdharan_daily_work_report")
 
 from dashboard import dashboard_bp
 app.register_blueprint(dashboard_bp)
+from user import user_bp
+app.register_blueprint(user_bp)
 
 
 def format_sheet(sheet):
