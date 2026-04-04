@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 credentials.json
+node_modules/
+
+

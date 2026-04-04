@@ -1,0 +1,11 @@
+{
+  "name": "report-tailwind-build",
+  "private": true,
+  "scripts": {
+    "build:tailwind": "tailwindcss -c tailwind.config.js -i ./src/tailwind-report.css -o ./static/css/tailwind-report.css --minify",
+    "watch:tailwind": "tailwindcss -c tailwind.config.js -i ./src/tailwind-report.css -o ./static/css/tailwind-report.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}
